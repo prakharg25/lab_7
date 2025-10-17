@@ -1,0 +1,163 @@
+RPi
+import cv2
+import mediapipe as mp
+import serial
+import time
+SERIAL_PORT = '/dev/ttyACM0'
+IP_CAM_URL = 'http://<ip>:8080/video'
+ser = serial.Serial(SERIAL_PORT, 9600, timeout=1)
+cap = cv2.VideoCapture(IP_CAM_URL)
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7)
+mp_draw = mp.solutions.drawing_utils
+last_command = None
+error_frames = 0
+def gesture_to_command(fingers):
+    if fingers == [False, True, False, False, False]:
+        return "forward"
+    elif fingers == [False, False, True, False, False]:
+        return "backward"
+    elif fingers == [False, False, False, True, False]:
+        return "left"
+    elif fingers == [False, False, False, False, True]:
+        return "right"
+    elif sum(fingers) == 0:
+        return "stop"
+    return None
+while True:
+    ret, frame = cap.read()
+    if not ret or frame is None:
+        print("Camera frame error detected, attempting recovery...")
+        error_frames += 1
+        if error_frames > 10:
+            cap.release()
+            time.sleep(1)
+            cap = cv2.VideoCapture(IP_CAM_URL)
+            error_frames = 0
+        time.sleep(0.1)
+        continue
+    error_frames = 0
+    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(img_rgb)
+    fingers = [False] * 5
+    if results.multi_hand_landmarks:
+        hand = results.multi_hand_landmarks[0]
+        lm = hand.landmark
+        fingers[0] = lm[mp_hands.HandLandmark.THUMB_TIP].x < lm[mp_hands.HandLandmark.THUMB_IP].x
+        fingers[1] = lm[mp_hands.HandLandmark.INDEX_FINGER_TIP].y < lm[mp_hands.HandLandmark.INDEX_FINGER_PIP].y
+        fingers[2] = lm[mp_hands.HandLandmark.MIDDLE_FINGER_TIP].y < lm[mp_hands.HandLandmark.MIDDLE_FINGER_PIP].y
+        fingers[3] = lm[mp_hands.HandLandmark.RING_FINGER_TIP].y < lm[mp_hands.HandLandmark.RING_FINGER_PIP].y
+        fingers[4] = lm[mp_hands.HandLandmark.PINKY_TIP].y < lm[mp_hands.HandLandmark.PINKY_PIP].y
+        command = gesture_to_command(fingers)
+        if command and command != last_command:
+            print(f"Sending command: {command}")
+            ser.write((command + '\n').encode())
+            last_command = command
+        mp_draw.draw_landmarks(frame, hand, mp_hands.HAND_CONNECTIONS)
+    else:
+        if last_command != "stop":
+            print("No hand detected — sending stop")
+            ser.write(b'stop\n')
+            last_command = "stop"
+    cv2.imshow('Gesture Car Control', frame)
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
+    time.sleep(0.08)
+cap.release()
+cv2.destroyAllWindows()
+ser.close()
+
+Arduino
+#define ENA 5
+#define ENB 6
+#define IN1 7
+#define IN2 8
+#define IN3 9
+#define IN4 11
+int speedVal = 150;
+void setup() {
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  Serial.begin(9600);
+  stopMotors();
+}
+void loop() {
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    Serial.print("Received command: ");
+    Serial.println(command);
+    if (command == "forward") {
+      moveForward(speedVal);
+    } else if (command == "backward") {
+      moveBackward(speedVal);
+    } else if (command == "left") {
+      turnLeft(speedVal);
+    } else if (command == "right") {
+      turnRight(speedVal);
+    } else if (command == "stop") {
+      stopMotors();
+    } else if (command.startsWith("speed ")) {
+      int newSpeed = command.substring(6).toInt();
+      if (newSpeed >= 0 && newSpeed <= 255) {
+        speedVal = newSpeed;
+        Serial.print("Speed set to ");
+        Serial.println(speedVal);
+      } else {
+        Serial.println("Invalid speed value. Use 0-255.");
+      }
+    } else {
+      Serial.println("Unknown command");
+    }
+  }
+  delay(100);
+}
+void moveForward(int speed) {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+  analogWrite(ENA, speed);
+  analogWrite(ENB, speed);
+  Serial.println("Moving forward");
+}
+void moveBackward(int speed) {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  analogWrite(ENA, speed);
+  analogWrite(ENB, speed);
+  Serial.println("Moving backward");
+}
+void turnLeft(int speed) {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+  analogWrite(ENA, speed);
+  analogWrite(ENB, speed);
+  Serial.println("Turning left");
+}
+void turnRight(int speed) {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+  analogWrite(ENA, speed);
+  analogWrite(ENB, speed);
+  Serial.println("Turning right");
+}
+void stopMotors() {
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+  Serial.println("Motors stopped");
+}
